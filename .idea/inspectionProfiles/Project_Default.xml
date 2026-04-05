@@ -1,0 +1,43 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="blinker" />
+          <option value="click" />
+          <option value="gunicorn" />
+          <option value="itsdangerous" />
+          <option value="joblib" />
+          <option value="MarkupSafe" />
+          <option value="numpy" />
+          <option value="packaging" />
+          <option value="pandas" />
+          <option value="python-dateutil" />
+          <option value="pytz" />
+          <option value="six" />
+          <option value="tzdata" />
+          <option value="Werkzeug" />
+          <option value="requests" />
+          <option value="pymongo" />
+          <option value="mysql-connector-python" />
+          <option value="lz4" />
+          <option value="fastapi" />
+          <option value="uvicorn" />
+          <option value="httpx" />
+          <option value="motor" />
+          <option value="aiomysql" />
+          <option value="filelock" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N803" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
