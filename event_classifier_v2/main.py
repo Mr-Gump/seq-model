@@ -130,10 +130,10 @@ def main(df_train: pd.DataFrame, df_test: pd.DataFrame, df_oot: pd.DataFrame):
     threshold_analysis(oot_labels, oot_probs)
 
     # ── 8. 输出预测结果（带 sn） ──────────────────────────────────────────────
-    df_test_result = df_test[["sn", "verify_dt", "target"]].copy()
+    df_test_result = df_test[["sn", "verify_time", "target"]].copy()
     df_test_result["prob"] = test_probs
 
-    df_oot_result = df_oot[["sn", "verify_dt", "target"]].copy()
+    df_oot_result = df_oot[["sn", "verify_time", "target"]].copy()
     df_oot_result["prob"] = oot_probs
 
     return model, df_test_result, df_oot_result
