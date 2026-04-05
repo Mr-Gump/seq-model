@@ -150,7 +150,7 @@ def train(
         if vl["ks"] > best_val_ks:
             best_val_ks = vl["ks"]
             best_epoch  = epoch
-            torch.save(model.state_dict(), save_dir / "best_model.pt.bak")
+            torch.save(model.state_dict(), save_dir / "best_model.pt")
 
     print(f"\n最优 Epoch {best_epoch}，Val KS = {best_val_ks:.4f}")
     print(f"模型已保存至 {save_dir / 'best_model.pt'}")
