@@ -28,26 +28,6 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
-# ── 配置 ──────────────────────────────────────────────────────────────────────
-CFG = dict(
-    max_seq_len = 128,
-    batch_size  = 128,
-    n_epochs    = 20,
-    lr          = 1e-3,
-    weight_decay= 1e-2,
-    save_dir    = "./checkpoints",
-    # 模型结构
-    num_event_types = 13,
-    d_model     = 48,
-    d_event     = 32,
-    d_time      = 32,
-    d_cont      = 12,   # 连续特征：onway_amt, onway_cnt, borrow_amt
-    d_pkg       = 4,   # is_same_pkg embedding
-    n_heads     = 4,
-    n_layers    = 2,
-    d_ffn       = 72,
-    dropout     = 0.1,
-)
 
 def get_device():
     if torch.cuda.is_available():
@@ -57,7 +37,7 @@ def get_device():
     else:
         return torch.device("cpu")
 
-def main(df_train: pd.DataFrame, df_test: pd.DataFrame, df_oot: pd.DataFrame):
+def main(df_train: pd.DataFrame, df_test: pd.DataFrame, df_oot: pd.DataFrame, CFG: dict):
     device = get_device()
 
     # ── 1. 构建 DataLoader ────────────────────────────────────────────────────
