@@ -13,13 +13,9 @@ class EventEmbedding(nn.Module):
     """
     将单个 Event 的特征编码并融合为 d_model 维向量。
 
-    各路编码：
-        event_id     → Embedding(NUM_EVENT_TYPES+1, d_event)   +1 for PAD(0)
-        time_delta   → Linear(1, d_time)                        已 log1p
-        cont_values  → Linear(3, d_cont)                        已 log1p  [onway_amt, onway_cnt, borrow_amt]
-        is_same_pkg  → Embedding(2, d_pkg)                      0/1
-
-    拼接后 → Linear(d_event+d_time+d_cont+d_pkg, d_model) → LayerNorm
+    本实验仅使用：
+        event_id + time_delta（处理后）
+    拼接后线性映射到 d_model。
     """
 
     def __init__(
@@ -33,21 +29,11 @@ class EventEmbedding(nn.Module):
         dropout:         float = 0.1,
     ):
         super().__init__()
-        # assert d_event + d_time + d_cont + d_pkg == d_model, (
-        #     f"维度之和 {d_event+d_time+d_cont+d_pkg} 必须等于 d_model={d_model}"
-        # )
+        del d_cont, d_pkg
 
-        # event_id Embedding（0 = PAD）
         self.event_emb = nn.Embedding(num_event_types + 1, d_event, padding_idx=0)
-
-        # time_delta 投影
         self.time_proj = nn.Linear(1, d_time)
-
-        # 连续 value 投影：[onway_amt, onway_cnt, borrow_amt]
-        self.cont_proj = nn.Linear(3, d_cont)
-
-        # is_same_pkg Embedding：0/1 各有独立向量
-        self.pkg_emb = nn.Embedding(2, d_pkg)
+        self.fusion_proj = nn.Linear(d_event + d_time, d_model)
 
         self.norm    = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
@@ -61,21 +47,10 @@ class EventEmbedding(nn.Module):
 
         Returns : [B, L, d_model]
         """
-        e   = self.event_emb(event_ids)          # [B, L, d_event]
-        t   = self.time_proj(time_deltas)         # [B, L, d_time]
-        c   = self.cont_proj(cont_values)         # [B, L, d_cont]
-        pkg = self.pkg_emb(is_same_pkg_ids)       # [B, L, d_pkg]
-
-        e = e + t
-
-        x = torch.cat([
-            e,
-            # t,
-            c,
-            pkg
-        ], dim=-1)    # [B, L, d_model]
-
-        # x = x + t
+        del cont_values, is_same_pkg_ids
+        e = self.event_emb(event_ids)            # [B, L, d_event]
+        t = self.time_proj(time_deltas)          # [B, L, d_time]
+        x = self.fusion_proj(torch.cat([e, t], dim=-1))
         x = self.norm(x)
         x = self.dropout(x)
         return x
