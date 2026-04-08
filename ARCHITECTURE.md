@@ -1,4 +1,4 @@
-# 网络结构示意（event + pos + value-dims）
+# 网络结构示意（event + tAPE + value-dims）
 
 ```mermaid
 flowchart TD
@@ -11,7 +11,7 @@ flowchart TD
     F --> G
     G --> H[fusion_proj -> d_model]
     H --> I[layernorm + dropout]
-    I --> J[sinusoidal positional encoding]
+    I --> J[tAPE absolute positional encoding]
     J --> K[Transformer Encoder x N]
     K --> L[mean pooling]
     L --> M[MLP classifier]
