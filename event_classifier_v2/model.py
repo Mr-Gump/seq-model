@@ -5,21 +5,41 @@ model.py
 - value 拆分为：连续特征(3维) + 二值Embedding(1维)
 """
 
+import math
+
 import torch
 import torch.nn as nn
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """标准正弦位置编码。"""
+
+    def __init__(self, d_model: int, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.dropout = nn.Dropout(dropout)
+
+    def _build_pe(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        position = torch.arange(seq_len, device=device, dtype=dtype).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, device=device, dtype=dtype)
+            * (-math.log(10000.0) / self.d_model)
+        )
+        pe = torch.zeros(seq_len, self.d_model, device=device, dtype=dtype)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self._build_pe(x.size(1), x.device, x.dtype)
+        return self.dropout(x)
 
 
 class EventEmbedding(nn.Module):
     """
     将单个 Event 的特征编码并融合为 d_model 维向量。
 
-    各路编码：
-        event_id     → Embedding(NUM_EVENT_TYPES+1, d_event)   +1 for PAD(0)
-        time_delta   → Linear(1, d_time)                        已 log1p
-        cont_values  → Linear(3, d_cont)                        已 log1p  [onway_amt, onway_cnt, borrow_amt]
-        is_same_pkg  → Embedding(2, d_pkg)                      0/1
-
-    拼接后 → Linear(d_event+d_time+d_cont+d_pkg, d_model) → LayerNorm
+    本实验仅使用 event_id 序列信息，再映射到 d_model。
     """
 
     def __init__(
@@ -33,21 +53,9 @@ class EventEmbedding(nn.Module):
         dropout:         float = 0.1,
     ):
         super().__init__()
-        # assert d_event + d_time + d_cont + d_pkg == d_model, (
-        #     f"维度之和 {d_event+d_time+d_cont+d_pkg} 必须等于 d_model={d_model}"
-        # )
-
-        # event_id Embedding（0 = PAD）
+        del d_time, d_cont, d_pkg
         self.event_emb = nn.Embedding(num_event_types + 1, d_event, padding_idx=0)
-
-        # time_delta 投影
-        self.time_proj = nn.Linear(1, d_time)
-
-        # 连续 value 投影：[onway_amt, onway_cnt, borrow_amt]
-        self.cont_proj = nn.Linear(3, d_cont)
-
-        # is_same_pkg Embedding：0/1 各有独立向量
-        self.pkg_emb = nn.Embedding(2, d_pkg)
+        self.event_proj = nn.Linear(d_event, d_model)
 
         self.norm    = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
@@ -61,21 +69,8 @@ class EventEmbedding(nn.Module):
 
         Returns : [B, L, d_model]
         """
-        e   = self.event_emb(event_ids)          # [B, L, d_event]
-        t   = self.time_proj(time_deltas)         # [B, L, d_time]
-        c   = self.cont_proj(cont_values)         # [B, L, d_cont]
-        pkg = self.pkg_emb(is_same_pkg_ids)       # [B, L, d_pkg]
-
-        e = e + t
-
-        x = torch.cat([
-            e,
-            # t,
-            c,
-            pkg
-        ], dim=-1)    # [B, L, d_model]
-
-        # x = x + t
+        del time_deltas, cont_values, is_same_pkg_ids
+        x = self.event_proj(self.event_emb(event_ids))
         x = self.norm(x)
         x = self.dropout(x)
         return x
@@ -137,6 +132,7 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
+        self.positional_encoding = SinusoidalPositionalEncoding(d_model=d_model, dropout=dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -185,6 +181,7 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
+        x = self.positional_encoding(x)
         x = self.encoder(x, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
