@@ -9,30 +9,52 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-class SinusoidalPositionalEncoding(nn.Module):
-    """标准正弦位置编码。"""
+class FCPE(nn.Module):
+    """
+    Feature-based Cycle-aware Time Positional Encoding.
+    输出为语义嵌入 + 时间编码。
+    """
 
-    def __init__(self, d_model: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_event_types: int, padding_idx: int = 0):
         super().__init__()
+        if d_model % 2 != 0:
+            raise ValueError("d_model 必须为偶数")
         self.d_model = d_model
-        self.dropout = nn.Dropout(dropout)
+        self.num_freqs = d_model // 2
+        self.K = num_event_types
+        self.padding_idx = padding_idx
 
-    def _build_pe(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        position = torch.arange(seq_len, device=device, dtype=dtype).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, device=device, dtype=dtype)
-            * (-math.log(10000.0) / self.d_model)
+        init_freqs = torch.tensor(
+            [2 * math.pi * k / self.num_freqs for k in range(self.num_freqs)], dtype=torch.float32
         )
-        pe = torch.zeros(seq_len, self.d_model, device=device, dtype=dtype)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0)
+        self.w = nn.Parameter(init_freqs)
+        self.W_mu = nn.Parameter(torch.randn(self.num_freqs, num_event_types) * 0.1)
+        self.event_embed = nn.Embedding(num_event_types, d_model, padding_idx=padding_idx)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self._build_pe(x.size(1), x.device, x.dtype)
-        return self.dropout(x)
+    def forward(self, t: torch.Tensor, ki: torch.Tensor) -> torch.Tensor:
+        """
+        t  : [B, L]   处理后的连续时间
+        ki : [B, L]   事件类型 id（含 PAD=0）
+        """
+        ki_onehot = F.one_hot(ki, num_classes=self.K).float()  # [B, L, K]
+        mu = torch.einsum("fk,blk->blf", self.W_mu, ki_onehot)
+        mu = F.softplus(mu)
+
+        theta = t.unsqueeze(-1) * self.w.view(1, 1, -1)
+        cos_enc = mu * torch.cos(theta)
+        sin_enc = mu * torch.sin(theta)
+        time_encoding = torch.stack([cos_enc, sin_enc], dim=-1).view(t.size(0), t.size(1), self.d_model)
+
+        semantic_embed = self.event_embed(ki)
+        out = semantic_embed + time_encoding
+
+        if self.padding_idx is not None:
+            valid_mask = (ki != self.padding_idx).unsqueeze(-1).float()
+            out = out * valid_mask
+        return out
 
 
 class EventEmbedding(nn.Module):
@@ -40,8 +62,8 @@ class EventEmbedding(nn.Module):
     将单个 Event 的特征编码并融合为 d_model 维向量。
 
     本实验使用：
-        event_id + value 维度信息（cont_values + is_same_pkg）
-    拼接后映射到 d_model。
+        FCPE(事件语义 + 时间编码) + value 维度信息（cont_values + is_same_pkg）
+    融合后映射到 d_model。
     """
 
     def __init__(
@@ -55,12 +77,11 @@ class EventEmbedding(nn.Module):
         dropout:         float = 0.1,
     ):
         super().__init__()
-        del d_time
-
-        self.event_emb = nn.Embedding(num_event_types + 1, d_event, padding_idx=0)
+        del d_event, d_time
+        self.fcpe = FCPE(d_model=d_model, num_event_types=num_event_types + 1, padding_idx=0)
         self.cont_proj = nn.Linear(3, d_cont)
         self.pkg_emb = nn.Embedding(2, d_pkg)
-        self.fusion_proj = nn.Linear(d_event + d_cont + d_pkg, d_model)
+        self.value_proj = nn.Linear(d_cont + d_pkg, d_model)
 
         self.norm    = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
@@ -74,11 +95,12 @@ class EventEmbedding(nn.Module):
 
         Returns : [B, L, d_model]
         """
-        del time_deltas
-        e = self.event_emb(event_ids)              # [B, L, d_event]
+        t = time_deltas.squeeze(-1)
+        e = self.fcpe(t, event_ids)                # [B, L, d_model]
         c = self.cont_proj(cont_values)            # [B, L, d_cont]
         pkg = self.pkg_emb(is_same_pkg_ids)        # [B, L, d_pkg]
-        x = self.fusion_proj(torch.cat([e, c, pkg], dim=-1))
+        v = self.value_proj(torch.cat([c, pkg], dim=-1))
+        x = e + v
         x = self.norm(x)
         x = self.dropout(x)
         return x
@@ -140,8 +162,6 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
-        self.positional_encoding = SinusoidalPositionalEncoding(d_model=d_model, dropout=dropout)
-
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -189,7 +209,6 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
-        x = self.positional_encoding(x)
         x = self.encoder(x, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)

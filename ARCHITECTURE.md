@@ -1,24 +1,27 @@
-# 网络结构示意（event + pos + value-dims）
+# 网络结构示意（event + FCPE + value-dims）
 
 ```mermaid
 flowchart TD
-    A[event_id] --> B[event_emb]
-    C[value_cont: onway_amt/onway_cnt/borrow_amt] --> D[cont_proj]
-    E[is_same_pkg] --> F[pkg_emb]
+    A[event_id] --> B[FCPE semantic embed]
+    T[processed time_delta] --> C[FCPE time encoding]
+    B --> D[FCPE output]
+    C --> D
 
-    B --> G[concat]
-    D --> G
-    F --> G
-    G --> H[fusion_proj -> d_model]
-    H --> I[layernorm + dropout]
-    I --> J[sinusoidal positional encoding]
-    J --> K[Transformer Encoder x N]
-    K --> L[mean pooling]
-    L --> M[MLP classifier]
-    M --> N[logits]
+    E[value_cont: onway_amt/onway_cnt/borrow_amt] --> F[cont_proj]
+    G[is_same_pkg] --> H[pkg_emb]
+    F --> I[value_proj -> d_model]
+    H --> I
+
+    D --> J[add]
+    I --> J
+    J --> K[layernorm + dropout]
+    K --> L[Transformer Encoder x N]
+    L --> M[mean pooling]
+    M --> N[MLP classifier]
+    N --> O[logits]
 ```
 
 ## 输入特征
 
-- 使用：`event_id`、`cont_values`、`is_same_pkg`
-- 不使用：`time_delta`
+- 使用：`event_id`、`time_delta`（处理后）、`cont_values`、`is_same_pkg`
+- 位置建模：由 FCPE 负责（替代正弦位置编码）
