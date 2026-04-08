@@ -22,7 +22,7 @@ class EventSequenceDataset(Dataset):
         sn            : 订单号（仅保留用于追溯，不参与训练）
         target        : 标签 0/1
         event_seq     : List[int]，事件ID列表（1~14）
-        time_delta_seq: List[float]，时间间隔列表（秒），首个为 0
+        time_delta_seq: List[float]，相对首事件的小时数序列，首个为 0
         value_seq     : List[Tuple]，四元组列表
                         每个元组 = (onway_amt, onway_cnt, borrow_amt, is_same_pkg)
 
@@ -58,9 +58,9 @@ class EventSequenceDataset(Dataset):
         # ── event_id：LongTensor [L] ──────────────────────────────────────────
         event_ids = torch.tensor(event_seq, dtype=torch.long)   # 1-indexed，0 留给 PAD
 
-        # ── time_delta：log1p 压缩 → [L, 1] ──────────────────────────────────
+        # ── time_delta：相对首事件的小时数 → [L, 1] ───────────────────────────
         time_deltas = torch.tensor(
-            [np.log1p(t / 3600 ) for t in time_delta_seq],
+            [float(t) for t in time_delta_seq],
             dtype=torch.float32
         ).unsqueeze(-1)   # [L, 1]
 

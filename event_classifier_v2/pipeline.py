@@ -23,14 +23,24 @@ def _parse_event_list(value):
     return ast.literal_eval(value)
 
 
-def _remaining_time_deltas(time_deltas):
+def _elapsed_hours_from_first_event(events):
     """
-    将 time_delta 序列转换为“剩余时间”序列（与 notebook 保持一致）。
+    使用事件绝对时间戳，构造“距首事件的小时数”序列。
+    输入 events 中每个元素需包含 event_time（秒级时间戳）。
     """
-    arr = np.asarray(time_deltas, dtype=np.float64)
-    total = float(arr.sum())
-    cumsum = np.cumsum(arr)
-    return (total - cumsum).tolist()
+    if len(events) == 0:
+        return []
+    if "event_time" not in events[0]:
+        raise ValueError("event_lst 中缺少 event_time，无法构造首事件相对时间")
+
+    first_ts = float(events[0]["event_time"])
+    elapsed_hours = []
+    for event in events:
+        if "event_time" not in event:
+            raise ValueError("event_lst 中存在缺少 event_time 的事件")
+        ts = float(event["event_time"])
+        elapsed_hours.append(max(ts - first_ts, 0.0) / 3600.0)
+    return elapsed_hours
 
 
 def build_feature_dataframe(seq_data_path: str, sample_path: str) -> pd.DataFrame:
@@ -58,9 +68,7 @@ def build_feature_dataframe(seq_data_path: str, sample_path: str) -> pd.DataFram
     df_seq["event_seq"] = df_seq["event_lst"].apply(
         lambda events: [event["event_id"] for event in events]
     )
-    df_seq["time_delta_seq"] = df_seq["event_lst"].apply(
-        lambda events: [event["time_delta"] for event in events]
-    )
+    df_seq["time_delta_seq"] = df_seq["event_lst"].apply(_elapsed_hours_from_first_event)
     df_seq["value_seq"] = df_seq["event_lst"].apply(
         lambda events: [
             (
@@ -72,8 +80,6 @@ def build_feature_dataframe(seq_data_path: str, sample_path: str) -> pd.DataFram
             for event in events
         ]
     )
-    df_seq["time_delta_seq"] = df_seq["time_delta_seq"].apply(_remaining_time_deltas)
-
     df = pd.merge(
         df_sample,
         df_seq[["sn", "event_seq", "time_delta_seq", "value_seq"]],
