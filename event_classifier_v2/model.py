@@ -5,8 +5,36 @@ model.py
 - value 拆分为：连续特征(3维) + 二值Embedding(1维)
 """
 
+import math
+
 import torch
 import torch.nn as nn
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """标准正弦位置编码，为序列注入位置信息。"""
+
+    def __init__(self, d_model: int, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.dropout = nn.Dropout(dropout)
+
+    def _build_pe(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        position = torch.arange(seq_len, device=device, dtype=dtype).unsqueeze(1)  # [L, 1]
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, device=device, dtype=dtype)
+            * (-math.log(10000.0) / self.d_model)
+        )  # [d_model/2]
+
+        pe = torch.zeros(seq_len, self.d_model, device=device, dtype=dtype)  # [L, d_model]
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)  # [1, L, d_model]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pe = self._build_pe(seq_len=x.size(1), device=x.device, dtype=x.dtype)
+        x = x + pe
+        return self.dropout(x)
 
 
 class EventEmbedding(nn.Module):
@@ -137,6 +165,7 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
+        self.positional_encoding = SinusoidalPositionalEncoding(d_model=d_model, dropout=dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -185,6 +214,7 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
+        x = self.positional_encoding(x)
         x = self.encoder(x, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
