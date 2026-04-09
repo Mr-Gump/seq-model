@@ -5,21 +5,40 @@ model.py
 - value 拆分为：连续特征(3维) + 二值Embedding(1维)
 """
 
+import math
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+class AbsolutePositionalEncoding(nn.Module):
+    """标准绝对位置编码（sin/cos）。"""
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1024):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe.unsqueeze(0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(x + self.pe[:, :x.size(1), :])
 
 
 class EventEmbedding(nn.Module):
     """
     将单个 Event 的特征编码并融合为 d_model 维向量。
 
-    各路编码：
-        event_id     → Embedding(NUM_EVENT_TYPES+1, d_event)   +1 for PAD(0)
-        time_delta   → Linear(1, d_time)                        已 log1p
-        cont_values  → Linear(3, d_cont)                        已 log1p  [onway_amt, onway_cnt, borrow_amt]
-        is_same_pkg  → Embedding(2, d_pkg)                      0/1
-
-    拼接后 → Linear(d_event+d_time+d_cont+d_pkg, d_model) → LayerNorm
+    本实验编码方式：
+        1) event_id -> one-hot 事件类型特征
+        2) 拼接 value 特征（cont_values + is_same_pkg）与时间差（小时）特征
+        3) 两层网络: Linear -> Norm -> ReLU -> Linear 映射到 d_model
     """
 
     def __init__(
@@ -33,23 +52,17 @@ class EventEmbedding(nn.Module):
         dropout:         float = 0.1,
     ):
         super().__init__()
-        # assert d_event + d_time + d_cont + d_pkg == d_model, (
-        #     f"维度之和 {d_event+d_time+d_cont+d_pkg} 必须等于 d_model={d_model}"
-        # )
+        del d_event, d_time, d_cont, d_pkg
 
-        # event_id Embedding（0 = PAD）
-        self.event_emb = nn.Embedding(num_event_types + 1, d_event, padding_idx=0)
-
-        # time_delta 投影
-        self.time_proj = nn.Linear(1, d_time)
-
-        # 连续 value 投影：[onway_amt, onway_cnt, borrow_amt]
-        self.cont_proj = nn.Linear(3, d_cont)
-
-        # is_same_pkg Embedding：0/1 各有独立向量
-        self.pkg_emb = nn.Embedding(2, d_pkg)
-
-        self.norm    = nn.LayerNorm(d_model)
+        self.onehot_dim = num_event_types + 1  # 含 PAD(0)
+        input_dim = self.onehot_dim + 3 + 1 + 1  # onehot + cont_values(3) + is_same_pkg + time_hours
+        hidden_dim = max(d_model, input_dim)
+        self.feature_mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, d_model),
+        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, event_ids, time_deltas, cont_values, is_same_pkg_ids):
@@ -61,22 +74,11 @@ class EventEmbedding(nn.Module):
 
         Returns : [B, L, d_model]
         """
-        e   = self.event_emb(event_ids)          # [B, L, d_event]
-        t   = self.time_proj(time_deltas)         # [B, L, d_time]
-        c   = self.cont_proj(cont_values)         # [B, L, d_cont]
-        pkg = self.pkg_emb(is_same_pkg_ids)       # [B, L, d_pkg]
-
-        e = e + t
-
-        x = torch.cat([
-            e,
-            # t,
-            c,
-            pkg
-        ], dim=-1)    # [B, L, d_model]
-
-        # x = x + t
-        x = self.norm(x)
+        event_onehot = F.one_hot(event_ids, num_classes=self.onehot_dim).float()  # [B, L, onehot_dim]
+        pkg = is_same_pkg_ids.unsqueeze(-1).float()                                # [B, L, 1]
+        time_hours = time_deltas                                                   # [B, L, 1]
+        x_in = torch.cat([event_onehot, cont_values, pkg, time_hours], dim=-1)
+        x = self.feature_mlp(x_in)
         x = self.dropout(x)
         return x
 
@@ -137,6 +139,7 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
+        self.positional_encoding = AbsolutePositionalEncoding(d_model=d_model, dropout=dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -185,6 +188,7 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
+        x = self.positional_encoding(x)
         x = self.encoder(x, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
