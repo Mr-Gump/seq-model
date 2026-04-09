@@ -54,14 +54,14 @@ def _infer_num_event_types(df) -> int:
 def _default_model_cfg(num_event_types: int) -> Dict[str, float]:
     return {
         "num_event_types": num_event_types,
-        "d_model": 48,
+        "d_model": 32,
         "d_event": 32,
         "d_time": 32,
         "d_cont": 12,
         "d_pkg": 4,
         "n_heads": 4,
         "n_layers": 2,
-        "d_ffn": 72,
+        "d_ffn": 64,
         "dropout": 0.1,
         "max_seq_len": 32,
         "batch_size": 128,
