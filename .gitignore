@@ -1,5 +1,4 @@
 /dataset/
-/artifacts/
 /checkpoints/
 __pycache__/
 *.pyc
