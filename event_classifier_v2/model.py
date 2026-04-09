@@ -5,29 +5,25 @@ model.py
 - value 拆分为：连续特征(3维) + 二值Embedding(1维)
 """
 
-import math
-
 import torch
 import torch.nn as nn
 
 
-class AbsolutePositionalEncoding(nn.Module):
-    """标准绝对位置编码（sin/cos）。"""
+class RelativePositionBias(nn.Module):
+    """相对位置偏置（共享头），用于替代绝对位置编码。"""
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1024):
+    def __init__(self, max_len: int = 1024):
         super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe.unsqueeze(0))
+        self.max_len = max_len
+        self.bias = nn.Embedding(2 * max_len - 1, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.dropout(x + self.pe[:, :x.size(1), :])
+    def forward(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        pos = torch.arange(seq_len, device=device)
+        rel = pos.unsqueeze(1) - pos.unsqueeze(0)  # [L, L]
+        rel = rel.clamp(-(self.max_len - 1), self.max_len - 1)
+        rel_idx = rel + (self.max_len - 1)  # [0, 2*max_len-2]
+        rel_bias = self.bias(rel_idx).squeeze(-1)  # [L, L]
+        return rel_bias.to(dtype=dtype)
 
 
 class EventEmbedding(nn.Module):
@@ -112,6 +108,7 @@ class EventTransformerClassifier(nn.Module):
     n_layers        : int    Encoder 层数，默认 3
     d_ffn           : int    FFN 内层维度，默认 256
     dropout         : float  dropout 率，默认 0.1
+    max_len         : int    相对位置偏置最大长度，默认 1024
     """
 
     def __init__(
@@ -126,6 +123,7 @@ class EventTransformerClassifier(nn.Module):
         n_layers:        int   = 3,
         d_ffn:           int   = 256,
         dropout:         float = 0.1,
+        max_len:         int   = 1024,
     ):
         super().__init__()
 
@@ -138,7 +136,7 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
-        self.positional_encoding = AbsolutePositionalEncoding(d_model=d_model, dropout=dropout)
+        self.relative_position_bias = RelativePositionBias(max_len=max_len)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -187,8 +185,10 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
-        x = self.positional_encoding(x)
-        x = self.encoder(x, src_key_padding_mask=padding_mask)
+        rel_bias = self.relative_position_bias(
+            seq_len=x.size(1), device=x.device, dtype=x.dtype
+        )
+        x = self.encoder(x, mask=rel_bias, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
         return logits
