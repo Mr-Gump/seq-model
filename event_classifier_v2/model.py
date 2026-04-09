@@ -111,6 +111,7 @@ class EventTransformerClassifier(nn.Module):
     n_layers        : int    Encoder 层数，默认 3
     d_ffn           : int    FFN 内层维度，默认 256
     dropout         : float  dropout 率，默认 0.1
+    decoder_mode    : bool   是否使用单向因果注意力（不看未来），默认 True
     """
 
     def __init__(
@@ -125,8 +126,10 @@ class EventTransformerClassifier(nn.Module):
         n_layers:        int   = 3,
         d_ffn:           int   = 256,
         dropout:         float = 0.1,
+        decoder_mode:    bool  = True,
     ):
         super().__init__()
+        self.decoder_mode = decoder_mode
 
         self.embedding = EventEmbedding(
             num_event_types=num_event_types,
@@ -170,6 +173,17 @@ class EventTransformerClassifier(nn.Module):
                 if m.padding_idx is not None:
                     m.weight.data[m.padding_idx].zero_()
 
+    @staticmethod
+    def _build_causal_mask(seq_len: int, device: torch.device) -> torch.Tensor:
+        """
+        生成因果 mask：True 表示被遮蔽（未来位置不可见）。
+        形状 [L, L]，仅保留下三角（含对角）。
+        """
+        return torch.triu(
+            torch.ones(seq_len, seq_len, device=device, dtype=torch.bool),
+            diagonal=1,
+        )
+
     def forward(self, event_ids, time_deltas, cont_values, is_same_pkg_ids, padding_mask):
         """
         Parameters
@@ -185,7 +199,10 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
-        x = self.encoder(x, src_key_padding_mask=padding_mask)
+        attn_mask = None
+        if self.decoder_mode:
+            attn_mask = self._build_causal_mask(seq_len=x.size(1), device=x.device)
+        x = self.encoder(x, mask=attn_mask, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
         return logits
