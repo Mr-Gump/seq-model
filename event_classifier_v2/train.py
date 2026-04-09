@@ -107,6 +107,8 @@ def train(
     pos_weight:   float = 3.0,
     save_dir:     str   = "./checkpoints",
     device:       str   = "auto",
+    max_ks_gap:   float = 0.03,
+    ks_gap_penalty: float = 0.5,
 ):
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -129,29 +131,41 @@ def train(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    best_val_ks  = 0.0
-    best_epoch   = 0
+    best_selection_score = -float("inf")
+    best_val_ks = 0.0
+    best_ks_gap = float("inf")
+    best_epoch = 0
 
     print(f"Device: {device}  |  pos_weight: {pos_weight:.2f}\n")
     print(f"{'Epoch':>6} │ {'TrLoss':>8} {'TrAUC':>7} {'TrKS':>7} │"
-          f" {'ValLoss':>8} {'ValAUC':>7} {'ValKS':>7} {'ValPR':>7}")
-    print("─" * 70)
+          f" {'ValLoss':>8} {'ValAUC':>7} {'ValKS':>7} {'ValPR':>7} {'KSGap':>7}")
+    print("─" * 80)
 
     for epoch in range(1, n_epochs + 1):
         tr = train_one_epoch(model, train_loader, optimizer, criterion, scheduler, device)
         vl = evaluate(model, val_loader, criterion, device)
+        ks_gap = abs(tr["ks"] - vl["ks"])
 
-        flag = " ◀ best" if vl["ks"] > best_val_ks else ""
+        # 选择标准：优先高 Val KS，同时惩罚 Train/Val KS 差异过大
+        penalty = max(0.0, ks_gap - max_ks_gap) * ks_gap_penalty
+        selection_score = vl["ks"] - penalty
+
+        flag = " ◀ best" if selection_score > best_selection_score else ""
         print(
             f"{epoch:>6} │ {tr['loss']:>8.4f} {tr['auc']:>7.4f} {tr['ks']:>7.4f} │"
-            f" {vl['loss']:>8.4f} {vl['auc']:>7.4f} {vl['ks']:>7.4f} {vl['pr_auc']:>7.4f}{flag}"
+            f" {vl['loss']:>8.4f} {vl['auc']:>7.4f} {vl['ks']:>7.4f} {vl['pr_auc']:>7.4f} {ks_gap:>7.4f}{flag}"
         )
 
-        if vl["ks"] > best_val_ks:
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
             best_val_ks = vl["ks"]
-            best_epoch  = epoch
+            best_ks_gap = ks_gap
+            best_epoch = epoch
             torch.save(model.state_dict(), save_dir / "best_model.pt")
 
-    print(f"\n最优 Epoch {best_epoch}，Val KS = {best_val_ks:.4f}")
+    print(
+        f"\n最优 Epoch {best_epoch}，Val KS = {best_val_ks:.4f}，"
+        f"Train/Val KS Gap = {best_ks_gap:.4f}，Selection Score = {best_selection_score:.4f}"
+    )
     print(f"模型已保存至 {save_dir / 'best_model.pt'}")
     return model
