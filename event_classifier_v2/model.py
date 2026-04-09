@@ -9,21 +9,30 @@ import torch
 import torch.nn as nn
 
 
-class RelativePositionBias(nn.Module):
-    """相对位置偏置（共享头），用于替代绝对位置编码。"""
+class RotaryPositionEmbedding(nn.Module):
+    """RoPE: 对输入向量按位置进行旋转编码。"""
 
-    def __init__(self, max_len: int = 1024):
+    def __init__(self, d_model: int, base: float = 10000.0):
         super().__init__()
-        self.max_len = max_len
-        self.bias = nn.Embedding(2 * max_len - 1, 1)
+        if d_model % 2 != 0:
+            raise ValueError("RoPE 要求 d_model 为偶数")
+        inv_freq = 1.0 / (base ** (torch.arange(0, d_model, 2, dtype=torch.float32) / d_model))
+        self.register_buffer("inv_freq", inv_freq)
 
-    def forward(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        pos = torch.arange(seq_len, device=device)
-        rel = pos.unsqueeze(1) - pos.unsqueeze(0)  # [L, L]
-        rel = rel.clamp(-(self.max_len - 1), self.max_len - 1)
-        rel_idx = rel + (self.max_len - 1)  # [0, 2*max_len-2]
-        rel_bias = self.bias(rel_idx).squeeze(-1)  # [L, L]
-        return rel_bias.to(dtype=dtype)
+    @staticmethod
+    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+        x1 = x[..., 0::2]
+        x2 = x[..., 1::2]
+        return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, L, D]
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)  # [L]
+        freqs = torch.einsum("l,d->ld", positions, self.inv_freq)  # [L, D/2]
+        sin = freqs.sin().repeat_interleave(2, dim=-1).to(dtype=x.dtype).unsqueeze(0)  # [1, L, D]
+        cos = freqs.cos().repeat_interleave(2, dim=-1).to(dtype=x.dtype).unsqueeze(0)  # [1, L, D]
+        return (x * cos) + (self._rotate_half(x) * sin)
 
 
 class EventEmbedding(nn.Module):
@@ -108,7 +117,7 @@ class EventTransformerClassifier(nn.Module):
     n_layers        : int    Encoder 层数，默认 3
     d_ffn           : int    FFN 内层维度，默认 256
     dropout         : float  dropout 率，默认 0.1
-    max_len         : int    相对位置偏置最大长度，默认 1024
+    rope_base       : float  RoPE 频率基数，默认 10000.0
     """
 
     def __init__(
@@ -123,7 +132,7 @@ class EventTransformerClassifier(nn.Module):
         n_layers:        int   = 3,
         d_ffn:           int   = 256,
         dropout:         float = 0.1,
-        max_len:         int   = 1024,
+        rope_base:       float = 10000.0,
     ):
         super().__init__()
 
@@ -136,7 +145,7 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
-        self.relative_position_bias = RelativePositionBias(max_len=max_len)
+        self.rope = RotaryPositionEmbedding(d_model=d_model, base=rope_base)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -185,10 +194,8 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
-        rel_bias = self.relative_position_bias(
-            seq_len=x.size(1), device=x.device, dtype=x.dtype
-        )
-        x = self.encoder(x, mask=rel_bias, src_key_padding_mask=padding_mask)
+        x = self.rope(x)
+        x = self.encoder(x, src_key_padding_mask=padding_mask)
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
         return logits
