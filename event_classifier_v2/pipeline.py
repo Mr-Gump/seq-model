@@ -23,16 +23,6 @@ def _parse_event_list(value):
     return ast.literal_eval(value)
 
 
-def _remaining_time_deltas(time_deltas):
-    """
-    将 time_delta 序列转换为“剩余时间”序列（与 notebook 保持一致）。
-    """
-    arr = np.asarray(time_deltas, dtype=np.float64)
-    total = float(arr.sum())
-    cumsum = np.cumsum(arr)
-    return (total - cumsum).tolist()
-
-
 def build_feature_dataframe(seq_data_path: str, sample_path: str) -> pd.DataFrame:
     """
     从事件序列文件与样本标签文件构建训练用 DataFrame。
@@ -72,8 +62,6 @@ def build_feature_dataframe(seq_data_path: str, sample_path: str) -> pd.DataFram
             for event in events
         ]
     )
-    df_seq["time_delta_seq"] = df_seq["time_delta_seq"].apply(_remaining_time_deltas)
-
     df = pd.merge(
         df_sample,
         df_seq[["sn", "event_seq", "time_delta_seq", "value_seq"]],
