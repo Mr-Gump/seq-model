@@ -9,6 +9,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class AbsolutePositionalEncoding(nn.Module):
@@ -35,7 +36,7 @@ class EventEmbedding(nn.Module):
     将单个 Event 的特征编码并融合为 d_model 维向量。
 
     本实验编码方式：
-        1) event_id -> 8维可学习 embedding
+        1) event_id -> one-hot 事件类型特征
         2) 拼接 value 特征（cont_values + is_same_pkg）与时间差（小时）特征
         3) 两层网络: Linear -> Norm -> ReLU -> Linear 映射到 d_model
     """
@@ -53,8 +54,8 @@ class EventEmbedding(nn.Module):
         super().__init__()
         del d_event, d_time, d_cont, d_pkg
 
-        self.event_emb = nn.Embedding(num_event_types + 1, 8, padding_idx=0)
-        input_dim = 8 + 3 + 1 + 1  # event_emb(8) + cont_values(3) + is_same_pkg + time_hours
+        self.onehot_dim = num_event_types + 1  # 含 PAD(0)
+        input_dim = self.onehot_dim + 3 + 1 + 1  # onehot + cont_values(3) + is_same_pkg + time_hours
         hidden_dim = max(d_model, input_dim)
         self.feature_mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -73,10 +74,10 @@ class EventEmbedding(nn.Module):
 
         Returns : [B, L, d_model]
         """
-        event_vec = self.event_emb(event_ids)                                      # [B, L, 8]
+        event_onehot = F.one_hot(event_ids, num_classes=self.onehot_dim).float()  # [B, L, onehot_dim]
         pkg = is_same_pkg_ids.unsqueeze(-1).float()                                # [B, L, 1]
         time_hours = time_deltas                                                   # [B, L, 1]
-        x_in = torch.cat([event_vec, cont_values, pkg, time_hours], dim=-1)
+        x_in = torch.cat([event_onehot, cont_values, pkg, time_hours], dim=-1)
         x = self.feature_mlp(x_in)
         x = self.dropout(x)
         return x
