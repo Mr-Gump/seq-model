@@ -11,7 +11,6 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
-from sklearn.model_selection import train_test_split
 
 
 def _parse_event_list(value):
@@ -81,7 +80,10 @@ def split_train_val_test(
     random_state: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    先按时间排序，后段作为 test（OOT），前段做分层随机划分 train/val。
+    按时间顺序切分：
+      - 最早段: train
+      - 中间段: val（可视作 test）
+      - 最后段: test（可视作 OOT）
     默认比例约为 60% / 20% / 20%。
     """
     if not 0 < oot_ratio < 1:
@@ -89,18 +91,17 @@ def split_train_val_test(
     if not 0 < val_ratio_in_time < 1:
         raise ValueError("val_ratio_in_time 必须在 (0,1) 内")
 
+    del random_state  # 时间切分不依赖随机种子
+
     df_sorted = df.sort_values("verify_time").reset_index(drop=True)
     oot_start = int(len(df_sorted) * (1 - oot_ratio))
 
     df_in_time = df_sorted.iloc[:oot_start].copy()
     df_test = df_sorted.iloc[oot_start:].copy()
 
-    df_train, df_val = train_test_split(
-        df_in_time,
-        test_size=val_ratio_in_time,
-        random_state=random_state,
-        stratify=df_in_time["target"],
-    )
+    val_start = int(len(df_in_time) * (1 - val_ratio_in_time))
+    df_train = df_in_time.iloc[:val_start].copy()
+    df_val = df_in_time.iloc[val_start:].copy()
 
     return (
         df_train.reset_index(drop=True),
