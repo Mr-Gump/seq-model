@@ -1,8 +1,7 @@
 """
 model.py
-基于 Transformer Encoder 的事件序列二分类模型
-- is_same_pkg 改用 nn.Embedding(2, d) 处理
-- value 拆分为：连续特征(3维) + 二值Embedding(1维)
+基于 LSTM Encoder 的事件序列二分类模型
+- 保留特征融合部分（one-hot + 连续特征 + 二值特征 + 时间特征）
 """
 
 import math
@@ -109,9 +108,9 @@ class EventTransformerClassifier(nn.Module):
     d_time          : int    time_delta 投影维度，默认 24
     d_cont          : int    连续 value 投影维度，默认 56
     d_pkg           : int    is_same_pkg embedding 维度，默认 16
-    n_heads         : int    注意力头数，默认 4
-    n_layers        : int    Encoder 层数，默认 3
-    d_ffn           : int    FFN 内层维度，默认 256
+    n_heads         : int    兼容旧配置，LSTM 版本中不使用
+    n_layers        : int    LSTM 层数，默认 3
+    d_ffn           : int    兼容旧配置，LSTM 版本中不使用
     dropout         : float  dropout 率，默认 0.1
     """
 
@@ -129,6 +128,7 @@ class EventTransformerClassifier(nn.Module):
         dropout:         float = 0.1,
     ):
         super().__init__()
+        del n_heads, d_ffn
 
         self.embedding = EventEmbedding(
             num_event_types=num_event_types,
@@ -139,17 +139,14 @@ class EventTransformerClassifier(nn.Module):
             d_pkg=d_pkg,
             dropout=dropout,
         )
-        self.positional_encoding = AbsolutePositionalEncoding(d_model=d_model, dropout=dropout)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=d_ffn,
-            dropout=dropout,
-            batch_first=True,    # 输入格式 [B, L, d_model]
-            norm_first=True,     # Pre-LN，训练更稳定
+        # LSTM 按序建模，不再依赖显式位置编码。
+        self.encoder = nn.LSTM(
+            input_size=d_model,
+            hidden_size=d_model,
+            num_layers=n_layers,
+            dropout=dropout if n_layers > 1 else 0.0,
+            batch_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
 
         self.pooling = MeanPooling()
 
@@ -188,8 +185,14 @@ class EventTransformerClassifier(nn.Module):
         logits : [B]   未经 sigmoid（训练用 BCEWithLogitsLoss）
         """
         x = self.embedding(event_ids, time_deltas, cont_values, is_same_pkg_ids)
-        x = self.positional_encoding(x)
-        x = self.encoder(x, src_key_padding_mask=padding_mask)
+        lengths = (~padding_mask).sum(dim=1).clamp(min=1).cpu()
+        packed = nn.utils.rnn.pack_padded_sequence(
+            x, lengths=lengths, batch_first=True, enforce_sorted=False
+        )
+        packed_out, _ = self.encoder(packed)
+        x, _ = nn.utils.rnn.pad_packed_sequence(
+            packed_out, batch_first=True, total_length=padding_mask.size(1)
+        )
         x = self.pooling(x, padding_mask)
         logits = self.classifier(x).squeeze(-1)
         return logits
