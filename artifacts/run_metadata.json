@@ -1,25 +1,25 @@
 {
-  "model_path": "artifacts/models/best_model.pt",
+  "model_path": "artifacts\\models\\best_model.pt",
   "prediction_csv": {
-    "train": "artifacts/predictions/train_predictions.csv",
-    "val": "artifacts/predictions/val_predictions.csv",
-    "test": "artifacts/predictions/test_predictions.csv"
+    "train": "artifacts\\predictions\\train_predictions.csv",
+    "val": "artifacts\\predictions\\val_predictions.csv",
+    "test": "artifacts\\predictions\\test_predictions.csv"
   },
   "metrics": {
     "train": {
-      "auc": 0.667105301415541,
-      "pr_auc": 0.35005168782901935,
-      "ks": 0.24451954947838195
+      "auc": 0.7084683922711917,
+      "pr_auc": 0.40003151055927944,
+      "ks": 0.2966094457618674
     },
     "val": {
-      "auc": 0.6710687906369707,
-      "pr_auc": 0.3585275569557893,
-      "ks": 0.24952656574004012
+      "auc": 0.6971973769930998,
+      "pr_auc": 0.39342117533395077,
+      "ks": 0.29166089750997753
     },
     "test": {
-      "auc": 0.6507781048198756,
-      "pr_auc": 0.3530620473598638,
-      "ks": 0.22343152865787969
+      "auc": 0.6684551381380577,
+      "pr_auc": 0.37136947452028757,
+      "ks": 0.24298784608654933
     }
   },
   "split_rows": {
@@ -45,7 +45,7 @@
     "weight_decay": 0.01
   },
   "data_paths": {
-    "seq_data_path": "./dataset/event_lst.csv",
-    "sample_path": "./dataset/tmp_0403.csv"
+    "seq_data_path": "D:/dataset/event_lst.csv",
+    "sample_path": "D:/dataset/tmp_0403.csv"
   }
 }
